@@ -103,6 +103,7 @@ pros::ADIDigitalOut rightWing('A');
 double xPose = 0;
 double yPose = 0;
 
+
 void relocalizeWithWallLeft() {
     // read distances from sensors
     double horizDist = leftHorzWallSens.get();   // mm
@@ -134,6 +135,25 @@ void relocalizeWithWallRight() {
     yPose = FIELD_SIZE - vertDist  - VERTICAL_SENSOR_OFFSET; //front
 
     chassis.setPose(xPose, yPose, chassis.getPose().theta);
+}
+
+void exitDist(lemlib::Pose target, double dist){
+    chassis.waitUntil(fabs(chassis.getPose().distance(target) - dist));
+    chassis.cancelMotion();
+
+}
+
+void relativeDriveToDistance(double distance, double timeout, double maxSpeed){
+    lemlib::Pose currentPose = chassis.getPose();
+    bool forwards;
+    if(distance < 0){
+        forwards = false;
+    } else {
+        forwards = true;
+    }
+    double dx = distance * cos(currentPose.theta);
+    double dy = distance * sin(currentPose.theta);
+    chassis.moveToPoint(currentPose.x + dx, currentPose.y + dy, timeout, {forwards, maxSpeed});
 }
 // Global variables
 int current_auton_selection = 0;
@@ -226,11 +246,7 @@ void disabled() {}
 
 void competition_initialize() {}
 
-void exitDist(lemlib::Pose target, double dist){
-    chassis.waitUntil(fabs(chassis.getPose().distance(target) - dist));
-    chassis.cancelMotion();
 
-}
 void left_elims(){
 	pros::Task([=]{
 		while(true){
