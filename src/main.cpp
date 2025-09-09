@@ -1,6 +1,7 @@
 #include "main.h"
 #include "lemlib/api.hpp" // IWYU pragma: keep
 #define MATCH_COLOR true // true for red, false for false
+#define ROOM_TEMP 72.0
 // field size in inches (12 feet = 144 inches)
 constexpr double FIELD_SIZE = 144.0;
 
@@ -84,14 +85,18 @@ lemlib::ExpoDriveCurve steerCurve(3, // joystick deadband out of 127
 
 // create the chassis
 lemlib::Chassis chassis(drivetrain, linearController, angularController, sensors, &throttleCurve, &steerCurve);
-
+pros::Link link(1, "my_link", pros::E_LINK_TX); //radio port
+std::vector<pros::Rotation> rotation_all = pros::Rotation::get_all_devices();  // All rotation sensors that are connected
+std::vector<pros::Motor> motor_all = pros::Motor::get_all_devices();  // All rotation sensors that are connected
 pros::Motor bottomIntake(13);
 pros::Motor hood(19);
 pros::Optical ballSens(14);
-pros::Distance horizontalWallSens(21);
+pros::Distance leftHorzWallSens(21);
+pros::Distance rightHorzWallSens(21);
 pros::Distance verticalWallSens(22);
 pros::ADIDigitalOut matchloader('B');
 pros::ADIDigitalOut middleGoal('D');
+pros::ADIDigitalOut middleGoalDescorer('F');
 pros::ADIDigitalOut leftWing('E');
 pros::ADIDigitalOut rightWing('A');
 
@@ -100,7 +105,7 @@ double yPose = 0;
 
 void relocalizeWithWallLeft() {
     // read distances from sensors
-    double horizDist = horizontalWallSens.get();   // mm
+    double horizDist = leftHorzWallSens.get();   // mm
     double vertDist  = verticalWallSens.get();     // mm
 
     // convert to inches
@@ -115,7 +120,7 @@ void relocalizeWithWallLeft() {
 }
 void relocalizeWithWallRight() {
     // read distances from sensors
-    double horizDist = horizontalWallSens.get();   // mm
+    double horizDist = rightHorzWallSens.get();   // mm
     double vertDist  = verticalWallSens.get();     // mm
 
     // convert to inches
@@ -217,25 +222,10 @@ void initialize() {
     // thread to for brain screen and position logging
 }
 
-/**
- * Runs while the robot is disabled
- */
 void disabled() {}
 
-/**
- * runs after initialize if the robot is connected to field control
- */
 void competition_initialize() {}
 
-// get a path used for pure pursuit
-// this needs to be put outside a function
-ASSET(example_txt); // '.' replaced with "_" to make c++ happy
-
-/**
- * Runs during auto
- *
- * This is an example autonomous routine which demonstrates a lot of the features LemLib has to offer
- */
 void exitDist(lemlib::Pose target, double dist){
     chassis.waitUntil(fabs(chassis.getPose().distance(target) - dist));
     chassis.cancelMotion();
@@ -522,6 +512,7 @@ void opcontrol() {
 	bool downPressed;
 	bool rightPressed;
     isColorSorting = false;
+    int trackerDcs = 0;
     // controller
     // loop to continuously update motors
     while (true) {
@@ -541,6 +532,7 @@ void opcontrol() {
 			scoreMiddleGoal();
 		} else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_L2)){
 			leftWing.set_value(true);
+            middleGoalDescorer.set_value(true);
 		} else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_DOWN)){
 			rightWing.set_value(true);
 		} else if(controller.get_digital(pros::E_CONTROLLER_DIGITAL_Y)){
@@ -549,13 +541,50 @@ void opcontrol() {
 			stopIntake();
 			leftWing.set_value(false);
 			rightWing.set_value(false);
+            middleGoalDescorer.set_value(false);
 		}
 
 		if(controller.get_digital_new_press(pros::E_CONTROLLER_DIGITAL_B)){
 			bPressed = !bPressed;
 			matchloader.set_value(bPressed);
 		}
-		pros::lcd::print(0, "B: %.2f", bottomIntake.get_torque());
+        bool intakeOverheated = bottomIntake.get_temperature() > ROOM_TEMP;
+        bool hoodOverheated = hood.get_temperature() > ROOM_TEMP;
+        std::vector<double> leftTemps = leftMotors.get_temperature_all();
+        std::vector<double> rightTemps = rightMotors.get_temperature_all();
+        if(intakeOverheated){
+            pros::lcd::print(0, "Intake Overheated");
+        }
+        if(hoodOverheated){
+            pros::lcd::print(1, "Hood Overheated");
+        }
+
+        bool leftDriverOverheatedAverage = (leftTemps[0] + leftTemps[1] + leftTemps[2]) / 3 > ROOM_TEMP;
+        bool rightDriverOverheatedAverage = (rightTemps[0] + rightTemps[1] + rightTemps[2]) / 3 > ROOM_TEMP;
+        if(leftDriverOverheatedAverage || rightDriverOverheatedAverage){
+            pros::lcd::print(2, "Drive Overheated");
+        }
+
+        //handle radio disconnects
+        if(!link.connected()){
+            controller.rumble("_");
+        }
+        //handle tracker disconnects & motor disconnects
+        size_t rotPortsConnected = rotation_all.size();
+        size_t motorPortsConnected = motor_all.size();
+        if(rotPortsConnected < 1){
+            controller.rumble("_");
+            pros::lcd::print(5, "Tracker Disconnected");
+            trackerDcs++;
+        }
+        if(motorPortsConnected < 7){
+            controller.rumble("_");
+            pros::lcd::print(6, "Motor(s) Disconnected");
+        }
+        // print information to the screen
+		pros::lcd::print(3, "X: %.2f, Y: %.2f, Z: %.2f", chassis.getPose().x, chassis.getPose().y, chassis.getPose().theta);
+        pros::lcd::print(4, "LDist: %.2f, RDist: %.2f, BackDist: %.2f", leftHorzWallSens.get()/25.4, rightHorzWallSens.get()/25.4, verticalWallSens.get()/25.4);
+        pros::lcd::print(7, "DCS: %d", trackerDcs);
         // delay to save resources
         pros::delay(20);
     }
